@@ -32,32 +32,14 @@ make
 
 ## Example Outputs
 
-### Metrics Reader:
+### Metrics Reader
+![Metrics Reader Output](result/metric_reader.png)
 
-```text
-[INFO] Starting metrics reader. Monitoring /timesyncd_metrics_v1...
-Clients: 1 | Avg Latency: 121us | Min: 98us | Max: 145us | Jitter: 12.43us
-Clients: 3 | Avg Latency: 154us | Min: 88us | Max: 615us | Jitter: 42.10us
-```
+### Server Execution
+![Server Execution Output](result/server_1.png)
 
-### Server Execution:
-```text
-[INFO] Starting TimeSyncD Server...
-[INFO] Mode: TCP
-[INFO] Port: 9000
-[INFO] Accept thread started for TCP.
-[INFO] Broadcast thread started, interval: 100 ms
-[INFO] New TCP client connected from 127.0.0.1:45300.
-[INFO] SIGINT received, shutting down gracefully...
-```
-
-### Client Execution:
-```text
-[INFO] Connected to server 127.0.0.1:9000 via TCP
-[INFO] SYNC received. Latency est: 98us, Offset (Drift): 1500us
-[INFO] SYNC received. Latency est: 102us, Offset (Drift): 1504us
-[INFO] Client shut down.
-```
+### Client Execution
+![Client Execution Output](result/client_1.png)
 
 ## Internal Architectures
 
