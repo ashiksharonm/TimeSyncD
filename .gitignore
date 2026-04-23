@@ -1,0 +1,12 @@
+# Compiler objects
+*.o
+*.out
+
+# Generated binaries
+server_bin
+client_bin
+metrics_reader
+
+# Mac specific
+.DS_Store
+*.dSYM
