@@ -12,7 +12,15 @@ COMMON = common/protocol.c common/stats.c common/ntp.c common/utils.c
 SERVER_LIB = server/server_core.c server/metrics.c
 
 .PHONY: all test unit clean
-all: server_bin $(B)/test_unit
+CLIENT_SRCS = client/client_core.c
+
+all: server_bin client_bin metrics_reader $(B)/test_unit
+
+client_bin: client/client.c $(CLIENT_SRCS) $(COMMON) | $(B)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+metrics_reader: ipc/shm_metrics.c $(COMMON) | $(B)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 server_bin: server/server.c $(SERVER_LIB) $(COMMON) | $(B)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)

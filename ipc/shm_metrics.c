@@ -1,53 +1,37 @@
-#include "../include/protocol.h"
+/* Reads the server's shared-memory telemetry block and prints it every 2 s. */
+#include "../include/metrics.h"
 #include "../include/utils.h"
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <sys/mman.h>
-#include <math.h>
+#include <unistd.h>
 
 int main(void) {
     int fd = shm_open(SHM_NAME, O_RDWR, 0);
     if (fd < 0) {
-        LOG_ERR("Failed to open shared memory %s. Is the server running?", SHM_NAME);
+        LOG_ERR("cannot open %s. Is the server running?", SHM_NAME);
         return 1;
     }
-    
-    metrics_shm_t *shm = mmap(NULL, sizeof(metrics_shm_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    metrics_shm_t *shm = mmap(NULL, sizeof(*shm), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (shm == MAP_FAILED) {
-        LOG_ERR("Failed to map shared memory");
+        LOG_ERR("cannot map shared memory");
         return 1;
     }
-
-    LOG_INFO("Starting metrics reader. Monitoring %s...\n", SHM_NAME);
-
-    while (1) {
+    LOG_INFO("monitoring %s", SHM_NAME);
+    for (;;) {
         sleep(2);
-        
         pthread_mutex_lock(&shm->mutex);
-        uint32_t clients = shm->active_clients;
-        uint64_t total = shm->total_latency_ns;
-        uint64_t samples = shm->samples;
-        uint64_t min_l = shm->min_latency_ns;
-        uint64_t max_l = shm->max_latency_ns;
-        double m2 = shm->m2;
+        metrics_shm_t s = *shm;
         pthread_mutex_unlock(&shm->mutex);
-        
-        double variance = (samples > 1) ? m2 / (samples - 1) : 0.0;
-        double jitter = sqrt(variance);
-        
-        if (samples > 0) {
-            uint64_t avg = total / samples;
-            printf("Clients: %u | Avg Latency: %lluus | Min: %lluus | Max: %lluus | Jitter: %.2fus\n",
-                clients, (unsigned long long)avg / 1000, 
-                (unsigned long long)min_l / 1000, 
-                (unsigned long long)max_l / 1000, 
-                jitter / 1000.0);
+        if (s.latency.n) {
+            printf("Clients: %u | Requests: %llu | Expired: %llu | Latency avg %.1fus min %.1fus max %.1fus | Jitter %.1fus\n",
+                   s.active_clients, (unsigned long long)s.requests, (unsigned long long)s.expired,
+                   s.latency.mean / 1e3, (double)s.min_latency_ns / 1e3, (double)s.max_latency_ns / 1e3,
+                   welford_stddev(&s.latency) / 1e3);
         } else {
-            printf("Clients: %u | Waiting for samples...\n", clients);
+            printf("Clients: %u | Requests: %llu | waiting for latency samples...\n", s.active_clients,
+                   (unsigned long long)s.requests);
         }
+        fflush(stdout);
     }
-    
-    return 0;
 }
