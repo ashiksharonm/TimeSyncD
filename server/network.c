@@ -1,3 +1,4 @@
+#include <signal.h>
 #include "../include/server.h"
 #include "../include/utils.h"
 #include <stdio.h>
@@ -21,7 +22,7 @@ typedef struct {
 client_node_t g_clients[MAX_CLIENTS];
 pthread_mutex_t g_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 int g_server_sock = -1;
-extern int g_server_running;
+extern volatile sig_atomic_t g_server_running;
 extern server_config_t g_config;
 
 static void set_nonblocking(int sock) {

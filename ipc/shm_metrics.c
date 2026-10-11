@@ -8,7 +8,7 @@
 #include <math.h>
 
 int main(void) {
-    int fd = shm_open(SHM_NAME, O_RDWR, 0666);
+    int fd = shm_open(SHM_NAME, O_RDWR, 0);
     if (fd < 0) {
         LOG_ERR("Failed to open shared memory %s. Is the server running?", SHM_NAME);
         return 1;

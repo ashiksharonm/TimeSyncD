@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -pthread -O2 -g -std=c11
+CFLAGS = -Wall -Wextra -pthread -O2 -g -std=c11 -D_DEFAULT_SOURCE
 INCLUDES = -I./include -I../include
 LDFLAGS = -pthread -lm
 UNAME_S := $(shell uname -s)
