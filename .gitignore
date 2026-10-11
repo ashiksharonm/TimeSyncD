@@ -5,3 +5,4 @@ build/
 server_bin
 client_bin
 metrics_reader
+loadgen

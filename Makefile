@@ -14,9 +14,12 @@ SERVER_LIB = server/server_core.c server/metrics.c
 .PHONY: all test unit integration asan ubsan tsan clean
 CLIENT_SRCS = client/client_core.c
 
-all: server_bin client_bin metrics_reader $(B)/test_unit $(B)/test_integration
+all: server_bin client_bin metrics_reader loadgen $(B)/test_unit $(B)/test_integration
 
 client_bin: client/client.c $(CLIENT_SRCS) $(COMMON) | $(B)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+loadgen: tools/loadgen.c $(CLIENT_SRCS) $(COMMON) | $(B)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 metrics_reader: ipc/shm_metrics.c $(COMMON) | $(B)
@@ -57,4 +60,4 @@ SAN_ubsan = -fsanitize=undefined -fno-sanitize-recover=undefined
 SAN_tsan = -fsanitize=thread
 
 clean:
-	rm -rf $(B)
+	rm -rf $(B) server_bin client_bin metrics_reader loadgen
