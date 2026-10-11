@@ -9,9 +9,13 @@ endif
 B = build
 
 COMMON = common/protocol.c common/stats.c common/ntp.c common/utils.c
+SERVER_LIB = server/server_core.c server/metrics.c
 
 .PHONY: all test unit clean
-all: $(B)/test_unit
+all: server_bin $(B)/test_unit
+
+server_bin: server/server.c $(SERVER_LIB) $(COMMON) | $(B)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 $(B):
 	mkdir -p $(B)

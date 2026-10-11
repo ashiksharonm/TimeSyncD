@@ -1,68 +1,49 @@
+#include "../include/metrics.h"
 #include "../include/server.h"
 #include "../include/utils.h"
-#include <stdio.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
-#include <pthread.h>
 
-volatile sig_atomic_t g_server_running = 1;
-server_config_t g_config;
+static server_t *g_server;
 
-void handle_sigint(int sig) {
+static void on_signal(int sig) {
     (void)sig;
-    LOG_INFO("SIGINT received, shutting down gracefully...");
-    g_server_running = 0;
+    if (g_server) server_stop(g_server);
 }
 
-int main(int argc, char* argv[]) {
-    // defaults
-    g_config.mode_tcp = 1;
-    g_config.port = 9000;
-    g_config.interval_ms = 100; // default 100ms to avoid overwhelming logs if not specified
-    
+int main(int argc, char *argv[]) {
+    server_config_t cfg = {.tcp = 1, .port = 9000, .idle_sec = 30, .use_shm = 1, .backlog = 4096};
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--mode") == 0 && i + 1 < argc) {
-            g_config.mode_tcp = (strcmp(argv[++i], "tcp") == 0);
-        } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-            g_config.port = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--interval") == 0 && i + 1 < argc) {
-            g_config.interval_ms = atoi(argv[++i]);
+        if (!strcmp(argv[i], "--mode") && i + 1 < argc) cfg.tcp = !strcmp(argv[++i], "tcp");
+        else if (!strcmp(argv[i], "--port") && i + 1 < argc) cfg.port = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--idle-sec") && i + 1 < argc) cfg.idle_sec = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--max-clients") && i + 1 < argc) cfg.max_clients = (uint32_t)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-shm")) cfg.use_shm = 0;
+        else {
+            fprintf(stderr, "usage: %s [--mode tcp|udp] [--port N] [--idle-sec N] [--max-clients N] [--no-shm]\n", argv[0]);
+            return 2;
         }
     }
-    
-    signal(SIGINT, handle_sigint);
-    signal(SIGPIPE, SIG_IGN); // Ignore SIGPIPE on disconnected sockets
-    
-    LOG_INFO("Starting TimeSyncD Server...");
-    LOG_INFO("Mode: %s", g_config.mode_tcp ? "TCP" : "UDP");
-    LOG_INFO("Port: %d", g_config.port);
-    LOG_INFO("Interval: %d ms", g_config.interval_ms);
-    
-    sync_engine_init();
-    if (network_init(&g_config) < 0) {
-        LOG_ERR("Network initialization failed.");
-        sync_engine_cleanup();
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+    signal(SIGPIPE, SIG_IGN);
+
+    uint64_t nofile = raise_nofile_limit();
+    g_server = server_create(&cfg);
+    if (!g_server) {
+        LOG_ERR("failed to start server on port %d", cfg.port);
         return 1;
     }
-    
-    pthread_t accept_thread, worker_thread, broadcast_thread;
-    
-    if (g_config.mode_tcp) {
-        pthread_create(&accept_thread, NULL, accept_thread_func, NULL);
-    }
-    pthread_create(&worker_thread, NULL, worker_thread_func, NULL);
-    pthread_create(&broadcast_thread, NULL, broadcast_thread_func, NULL);
-    
-    if (g_config.mode_tcp) {
-        pthread_join(accept_thread, NULL);
-    }
-    pthread_join(worker_thread, NULL);
-    pthread_join(broadcast_thread, NULL);
-    
-    network_cleanup();
-    sync_engine_cleanup();
-    
-    LOG_INFO("Server shut down successfully.");
+    LOG_INFO("TimeSyncD server: %s port %d, idle timeout %ds, fd limit %llu",
+             cfg.tcp ? "TCP" : "UDP", server_port(g_server), cfg.idle_sec, (unsigned long long)nofile);
+    server_run(g_server);
+
+    server_stats_t st;
+    server_get_stats(g_server, &st);
+    LOG_INFO("shutting down: %llu requests, %llu accepted, %llu expired, %llu protocol errors",
+             (unsigned long long)st.requests, (unsigned long long)st.accepted,
+             (unsigned long long)st.expired, (unsigned long long)st.proto_errors);
+    server_destroy(g_server);
     return 0;
 }
