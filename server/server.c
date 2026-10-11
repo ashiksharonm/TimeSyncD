@@ -6,7 +6,7 @@
 #include <signal.h>
 #include <pthread.h>
 
-int g_server_running = 1;
+volatile sig_atomic_t g_server_running = 1;
 server_config_t g_config;
 
 void handle_sigint(int sig) {

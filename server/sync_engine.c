@@ -1,3 +1,4 @@
+#include <signal.h>
 #include "../include/server.h"
 #include "../include/utils.h"
 #include <unistd.h>
@@ -8,12 +9,12 @@
 
 metrics_shm_t* g_metrics = NULL;
 int g_shm_fd = -1;
-extern int g_server_running;
+extern volatile sig_atomic_t g_server_running;
 extern server_config_t g_config;
 
 void sync_engine_init(void) {
     shm_unlink(SHM_NAME); // Remove old one if exists
-    g_shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+    g_shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0600);
     if (g_shm_fd < 0) {
         LOG_ERR("Failed to create shared memory!");
         exit(1);

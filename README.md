@@ -1,8 +1,12 @@
 # TimeSyncD: Distributed Timing & Synchronization Engine
 
-TimeSyncD is a production-quality C-based Linux application designed to simulate distributed clock synchronization and dynamically measure critical timing characteristics—such as latency, jitter, and drift—across multiple network clients.
+TimeSyncD is a C-based Linux/POSIX project designed to simulate distributed clock synchronization and dynamically measure critical timing characteristics—such as latency, jitter, and drift—across multiple network clients.
 
-Inspired by real-world synchronization structures like NTP and PTP, TimeSyncD reflects core systems programming methodologies including robust multi-threading, synchronous/asynchronous POSIX networking, algorithm precision, and Inter-Process Communication (IPC).
+Inspired by real-world synchronization structures like NTP and PTP, TimeSyncD reflects core systems programming methodologies including robust multi-threading, synchronous/asynchronous POSIX networking, online statistics (Welford), and Inter-Process Communication (IPC).
+
+## Capacity and scope
+
+The server tracks up to 1,024 simultaneous clients (`MAX_CLIENTS` in `server/network.c`) and multiplexes them with `select()`. Precision has not been benchmarked: latency and jitter are measured, not claimed at any sub-millisecond accuracy.
 
 ## Features
 
@@ -10,7 +14,7 @@ Inspired by real-world synchronization structures like NTP and PTP, TimeSyncD re
 - **Protocol Flexibility**: Operates synchronously via TCP (connection-oriented) or asynchronously via UDP (connectionless).
 - **Latency & Jitter Aggregation**: Computes standard performance measurements, evaluating exact network jitter using Welford's online algorithm. 
 - **POSIX Shared Memory (IPC)**: Relies on `shm_open` for storing internal metrics safely evaluated by isolated reader executables.
-- **Client Drift Simulation**: Introduces isolated time-skew to test local offset capabilities precisely.
+- **Client Drift Simulation**: Each client applies a simulated random clock offset. There is no NTP-style offset correction; the server only measures round-trip latency and jitter.
 
 ## Quick Start & Build
 
@@ -43,4 +47,4 @@ make
 
 ## Internal Architectures
 
-Please refer to `docs/architecture.md` for intricate specifics related to how multi-threading works, how drift and jitter are precisely calculated, and the networking assumptions defining TCP versus UDP paradigms.
+Please refer to `docs/architecture.md` for intricate specifics related to how multi-threading works, how latency and jitter are calculated, and the networking assumptions defining TCP versus UDP paradigms.
