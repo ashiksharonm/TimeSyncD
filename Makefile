@@ -1,35 +1,28 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -pthread -O2 -g -std=c11 -D_DEFAULT_SOURCE
-INCLUDES = -I./include -I../include
-LDFLAGS = -pthread -lm
+CC      ?= cc
+OPT     ?= -O2
+CFLAGS  ?= -Wall -Wextra -Werror -g $(OPT) -std=gnu11 -pthread
+LDLIBS  = -lm -pthread
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    LDFLAGS += -lrt
+LDLIBS += -lrt
 endif
+B = build
 
-SERVER_SRCS = server/server.c server/network.c server/sync_engine.c common/utils.c
-CLIENT_SRCS = client/client.c common/utils.c
-METRICS_SRCS = ipc/shm_metrics.c
+COMMON = common/protocol.c common/stats.c common/ntp.c common/utils.c
 
-SERVER_OBJS = $(SERVER_SRCS:.c=.o)
-CLIENT_OBJS = $(CLIENT_SRCS:.c=.o)
-METRICS_OBJS = $(METRICS_SRCS:.c=.o)
+.PHONY: all test unit clean
+all: $(B)/test_unit
 
-.PHONY: all clean
+$(B):
+	mkdir -p $(B)
 
-all: server_bin client_bin metrics_reader
+$(B)/test_unit: tests/test_unit.c $(COMMON) | $(B)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-server_bin: $(SERVER_OBJS)
-	$(CC) $(CFLAGS) $(INCLUDES) -o server_bin $(SERVER_OBJS) $(LDFLAGS)
+unit: $(B)/test_unit
+	./$(B)/test_unit
 
-client_bin: $(CLIENT_OBJS)
-	$(CC) $(CFLAGS) $(INCLUDES) -o client_bin $(CLIENT_OBJS) $(LDFLAGS)
-
-metrics_reader: $(METRICS_OBJS)
-	$(CC) $(CFLAGS) $(INCLUDES) -o metrics_reader $(METRICS_OBJS) $(LDFLAGS)
-
-%.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+test: unit
 
 clean:
-	rm -f $(SERVER_OBJS) $(CLIENT_OBJS) $(METRICS_OBJS) server_bin client_bin metrics_reader
+	rm -rf $(B)
