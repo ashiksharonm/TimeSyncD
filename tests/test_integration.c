@@ -378,16 +378,29 @@ static void test_slow_reader_dropped(void) {
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof small);
     msg_t m = {.type = MSG_REQUEST, .client_id = 1, .t1 = 1};
     uint8_t f[FRAME_LEN];
-    int sent = 0;
-    for (int i = 0; i < 200000 && sent >= 0; i++) {
-        m.seq = (uint32_t)i;
+    /* Flood requests without ever reading replies.  Replies fill the kernel buffers, then the
+     * server's per-connection queue, and the connection is dropped.  Bounded by a deadline. */
+    struct timespec t0, tn;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (uint32_t i = 0;; i++) {
+        m.seq = i;
         proto_encode_frame(&m, f);
-        struct pollfd p = {.fd = fd, .events = POLLOUT};
-        if (poll(&p, 1, 20) <= 0) { usleep(5000); }
-        if (send(fd, f, sizeof f, MSG_DONTWAIT) < 0 && errno != EAGAIN) sent = -1;
-        server_stats_t st2;
-        server_get_stats(s, &st2);
-        if (st2.active == 0 && i > 100) break; /* dropped */
+        if (send(fd, f, sizeof f, MSG_DONTWAIT) < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) break; /* reset: the server dropped us */
+            usleep(200);
+        }
+        if ((i & 1023) == 0) {
+            server_stats_t st2;
+            server_get_stats(s, &st2);
+            clock_gettime(CLOCK_MONOTONIC, &tn);
+            if ((st2.active == 0 && i) || tn.tv_sec - t0.tv_sec > 20) break;
+        }
+    }
+    for (int i = 0; i < 100; i++) { /* let the server finish removing it */
+        server_stats_t st3;
+        server_get_stats(s, &st3);
+        if (st3.active == 0) break;
+        usleep(10000);
     }
     server_stats_t stats;
     server_get_stats(s, &stats);
