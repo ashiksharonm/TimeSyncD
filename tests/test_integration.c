@@ -379,6 +379,12 @@ static void test_slow_reader_dropped(void) {
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof small);
     msg_t m = {.type = MSG_REQUEST, .client_id = 1, .t1 = 1};
     uint8_t f[FRAME_LEN];
+    for (int i = 0; i < 200; i++) { /* wait until the server has accepted us */
+        server_stats_t st0;
+        server_get_stats(s, &st0);
+        if (st0.active == 1) break;
+        usleep(10000);
+    }
     /* Flood requests without ever reading replies.  Replies fill the kernel buffers, then the
      * server's per-connection queue, and the connection is dropped.  Bounded by a deadline. */
     struct timespec t0, tn;
