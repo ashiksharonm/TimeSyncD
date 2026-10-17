@@ -4,8 +4,63 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  build:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (-Wall -Wextra -Werror)
+        run: make
+      - name: Unit and integration tests (auto and poll backends)
+        run: make test
+
+  sanitizers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        san: [asan, ubsan, tsan]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: make ${{ matrix.san }} OPT=-O1
+
+  docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make
+      - name: Build image
+        run: docker build -t timesyncd:ci .
+      - name: Start, health-check, scrape, SIGTERM
+        run: |
+          docker run -d --name tsd -p 9000:9000 -p 9100:9100 timesyncd:ci
+          for i in $(seq 1 20); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' tsd)" = healthy ] && break
+            sleep 1
+          done
+          docker inspect -f 'health={{.State.Health.Status}}' tsd
+          curl -fsS localhost:9100/healthz
+          curl -fsS localhost:9100/metrics | grep -c '^timesyncd_' 
+          docker stop -t 10 tsd
+          docker logs tsd | tail -3
+          test "$(docker inspect -f '{{.State.ExitCode}}' tsd)" = 0
+
+  # Measures on the GitHub-hosted runner: concurrent clients handled and RTT percentiles.
+  loadtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make server_bin loadgen
+      - name: Raise fd limit and run
+        run: |
+          sudo prlimit --pid $$ --nofile=1048576:1048576 || true
+          ulimit -n $(ulimit -Hn)
+          mkdir -p results
+          python3 tools/loadtest.py --ci --out results/loadtest-ci.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loadtest-results
+          path: results/loadtest-ci.json

@@ -1,30 +1,52 @@
 #ifndef SERVER_H
 #define SERVER_H
 
-#include "protocol.h"
-#include <netinet/in.h>
+#include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
-    int mode_tcp; // 1 for tcp, 0 for udp
-    int port;
-    int interval_ms;
+    int tcp;          /* 1 = TCP, 0 = UDP */
+    int port;         /* 0 = pick an ephemeral port (see server_port) */
+    int idle_sec;     /* drop clients silent for this long; <= 0 disables */
+    uint32_t max_clients; /* 0 = unlimited (bounded by file descriptors) */
+    int use_shm;      /* publish telemetry in POSIX shared memory */
+    int backlog;
+    char backend[16]; /* "auto" (default when empty), "epoll" or "poll" */
+    int http_enabled; /* serve /metrics, /metrics.json and /healthz */
+    int http_port;    /* 0 = ephemeral (see server_http_port) */
+    uint32_t drift_max_clients; /* clients tracked for drift; 0 disables tracking */
+    int drain_ms;     /* on stop: keep flushing queued replies for up to this long */
+    int sndbuf;       /* SO_SNDBUF for accepted TCP connections, bytes; 0 = OS default (autotuned) */
+    int drift_top;    /* clients listed in /metrics.json (largest |drift| first) */
 } server_config_t;
 
-// Context for server shared memory
-extern metrics_shm_t* g_metrics;
+/* Fills cfg with the daemon defaults. */
+void server_config_defaults(server_config_t *cfg);
+/* Reads "key = value" lines ('#' comments).  Returns 0, or -1 with a message in err. */
+int server_config_load(const char *path, server_config_t *cfg, char *err, size_t errlen);
+/* Applies one key/value pair (the same keys as the file). Returns 0 or -1 (unknown key / bad value). */
+int server_config_set(server_config_t *cfg, const char *key, const char *value);
 
-// sync_engine.c
-void sync_engine_init(void);
-void sync_engine_cleanup(void);
-void sync_engine_update_metrics(uint64_t latency_ns);
-void sync_engine_set_clients(uint32_t active_clients);
-void* broadcast_thread_func(void* arg);
+typedef struct {
+    uint64_t accepted;    /* TCP connections accepted */
+    uint64_t rejected;    /* refused at max_clients */
+    uint64_t requests;    /* requests answered */
+    uint64_t proto_errors;/* malformed frames/datagrams */
+    uint64_t expired;     /* idle clients dropped */
+    uint64_t accept_errors; /* e.g. EMFILE */
+    uint32_t active;      /* current clients (TCP connections / UDP peers) */
+} server_stats_t;
 
-// network.c
-int network_init(const server_config_t* config);
-void network_cleanup(void);
-void* accept_thread_func(void* arg);
-void* worker_thread_func(void* arg);
-void network_broadcast_sync(uint64_t server_ts_ns);
+typedef struct server server_t;
 
-#endif // SERVER_H
+server_t *server_create(const server_config_t *cfg);
+int server_port(const server_t *s);
+int server_http_port(const server_t *s); /* 0 if the endpoint is disabled */
+const char *server_backend(const server_t *s);
+void server_run(server_t *s);   /* blocks until server_stop() */
+void server_stop(server_t *s);  /* async-signal-safe, callable from any thread */
+void server_get_stats(const server_t *s, server_stats_t *out);
+struct metrics *server_metrics(server_t *s);
+void server_destroy(server_t *s);
+
+#endif
