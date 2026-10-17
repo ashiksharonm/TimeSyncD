@@ -11,7 +11,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build (-Wall -Wextra -Werror)
         run: make
       - name: Unit and integration tests (auto and poll backends)
@@ -25,13 +25,13 @@ jobs:
         san: [asan, ubsan, tsan]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: make ${{ matrix.san }} OPT=-O1
 
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build image
         run: docker build -t timesyncd:ci .
       - name: Start, health-check, scrape, SIGTERM
@@ -52,7 +52,7 @@ jobs:
   loadtest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: make server_bin loadgen
       - name: Raise fd limit and run
         run: |
