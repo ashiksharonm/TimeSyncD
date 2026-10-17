@@ -298,6 +298,19 @@ static void *drift_client(void *arg) {
     return NULL;
 }
 
+/* Sanitizers (TSAN especially) slow every exchange 5-15x, so the timing-derived drift estimate
+ * is only checked loosely there; the strict bound applies to normal builds. */
+#if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
+#define DRIFT_TOL_PPM 100.0
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer) || __has_feature(address_sanitizer)
+#define DRIFT_TOL_PPM 100.0
+#endif
+#endif
+#ifndef DRIFT_TOL_PPM
+#define DRIFT_TOL_PPM 30.0
+#endif
+
 /* Metrics endpoint and per-client drift, against the true drift of simulated clocks. */
 static void test_metrics_and_drift(void) {
     server_config_t cfg = {.tcp = 1, .port = 0, .idle_sec = 0, .use_shm = 0, .http_enabled = 1, .http_port = 0, .drift_top = 10};
@@ -341,7 +354,7 @@ static void test_metrics_and_drift(void) {
         double measured = atof(p + strlen(key));
         double err = fabs(measured - jobs[i].drift);
         if (err > worst) worst = err;
-        assert(err < 30.0);
+        assert(err < DRIFT_TOL_PPM);
     }
     printf("  drift: %d clients with true drift up to 200 ppm, worst server-side estimate error %.1f ppm (loopback)\n", N, worst);
     free(r);
