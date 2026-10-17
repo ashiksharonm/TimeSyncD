@@ -76,7 +76,7 @@ HTTP (separate port, default 9100, `metrics = off` to disable):
 
 Per-client series are deliberately not exported to Prometheus (label cardinality); the JSON endpoint carries the top-N.
 
-Config keys (file or `--key value`): `mode port backend idle_sec max_clients backlog metrics metrics_port drift_max_clients drift_top drain_ms shm`.
+Config keys (file or `--key value`): `mode port backend idle_sec max_clients backlog metrics metrics_port drift_max_clients drift_top sndbuf drain_ms shm`.
 
 ## Drift estimation
 
