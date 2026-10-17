@@ -36,7 +36,24 @@ Docker: `docker compose up --build` (image runs as an unprivileged user with a h
 
 All numbers below come from the `loadtest` CI job on a GitHub-hosted runner, loopback, load generator and server on the same machine. The load generator is a single thread, so its own scheduling is part of the measured round trip; treat percentiles as an upper bound for the server alone. Nothing here is a claim about real networks.
 
-@@RESULTS@@
+Runner: AMD EPYC 7763, 4 vCPU, 15 GiB, Linux 6.17 (`ubuntu-latest`), one run (CI run 39052882969), TCP, `server_bin` plus `loadgen` on the same machine.
+
+Steady load: 200 clients at 10 requests/s each (2,000 replies/s), epoll backend. Round-trip time as seen by the load generator: p50 60 us, p99 120 us, p99.9 2.1 ms (24,000 samples).
+
+Concurrent clients: every client connects, then sends 1 request/s for 10 s after a 3 s warm-up. Nothing was dropped at any size; 20,000 is the ceiling of the test (one loopback address pair has about 28k ephemeral ports), not of the server.
+
+| backend | clients connected | dropped | RTT p50 | RTT p99 | replies/s |
+|---|---|---|---|---|---|
+| epoll | 1,000 | 0 | 174 us | 352 us | 1,000 |
+| epoll | 5,000 | 0 | 742 us | 1.03 ms | 5,000 |
+| epoll | 10,000 | 0 | 1.56 ms | 2.29 ms | 10,000 |
+| epoll | 20,000 | 0 | 5.23 ms | 8.35 ms | 19,994 |
+| poll | 1,000 | 0 | 361 us | 462 us | 1,000 |
+| poll | 5,000 | 0 | 1.55 ms | 2.21 ms | 4,999 |
+| poll | 10,000 | 0 | 4.21 ms | 6.72 ms | 9,998 |
+| poll | 20,000 | 0 | 14.9 ms | 26.9 ms | 19,974 |
+
+The growth of RTT with client count is partly the single-threaded load generator scanning its own sockets, so these are upper bounds for the server alone. The epoll-versus-poll gap shows the cost of `poll()`'s O(n) scan per wake-up. The earlier README claims (1,024+ clients via `select()`, sub-millisecond precision) were never measured and have been removed.
 
 ## Tests and CI
 
