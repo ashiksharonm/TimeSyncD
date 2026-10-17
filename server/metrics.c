@@ -6,6 +6,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+const uint32_t rtt_bucket_us[RTT_BUCKETS - 1] = {50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 100000};
+
 struct metrics {
     metrics_shm_t *shm;
     int fd;
@@ -72,6 +74,11 @@ void metrics_record_request(metrics_t *m, uint64_t rtt_ns) {
         if (lat < s->min_latency_ns) s->min_latency_ns = lat;
         if (lat > s->max_latency_ns) s->max_latency_ns = lat;
         welford_add(&s->latency, (double)lat);
+        int b = 0;
+        while (b < RTT_BUCKETS - 1 && rtt_ns / 1000 > rtt_bucket_us[b]) b++;
+        s->rtt_hist[b]++;
+        s->rtt_sum_ns += rtt_ns;
+        s->rtt_count++;
     }
     pthread_mutex_unlock(&s->mutex);
 }

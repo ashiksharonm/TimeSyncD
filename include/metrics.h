@@ -5,7 +5,11 @@
 #include <pthread.h>
 #include <stdint.h>
 
-#define SHM_NAME "/timesyncd_metrics_v2"
+#define SHM_NAME "/timesyncd_metrics_v3"
+
+/* Histogram of client-reported round-trip delays; upper bounds in microseconds, then +Inf. */
+#define RTT_BUCKETS 11
+extern const uint32_t rtt_bucket_us[RTT_BUCKETS - 1];
 
 /* Telemetry block.  Lives in POSIX shared memory (read by metrics_reader) or
  * in private memory when the server runs without shm (tests). */
@@ -15,6 +19,8 @@ typedef struct {
     uint64_t requests;     /* requests answered */
     uint64_t expired;      /* idle clients dropped */
     uint64_t min_latency_ns, max_latency_ns;
+    uint64_t rtt_hist[RTT_BUCKETS]; /* per-bucket (not cumulative) counts */
+    uint64_t rtt_sum_ns, rtt_count;
     welford_t latency;     /* one-way latency estimates (client-reported RTT / 2), ns */
 } metrics_shm_t;
 

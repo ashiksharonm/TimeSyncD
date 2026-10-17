@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -26,6 +27,13 @@
 #define ROUNDS 50
 
 static int g_port;
+static const char *g_backend = "auto";
+
+static void apply(server_config_t *c) {
+    snprintf(c->backend, sizeof c->backend, "%s", g_backend);
+    c->drift_max_clients = 1000;
+    c->drain_ms = 500;
+}
 
 static int dial(int tcp) {
     struct sockaddr_in sa = {0};
@@ -87,6 +95,7 @@ static void *server_thread(void *a) { server_run(((srv_arg_t *)a)->s); return NU
 
 static void run_mode(int tcp) {
     server_config_t cfg = {.tcp = tcp, .port = 0, .idle_sec = 0, .use_shm = 0};
+    apply(&cfg);
     server_t *s = server_create(&cfg);
     assert(s);
     g_port = server_port(s);
@@ -128,6 +137,7 @@ static void run_mode(int tcp) {
 /* Frames split across arbitrary writes, back-to-back frames, garbage. */
 static void test_tcp_framing_on_wire(void) {
     server_config_t cfg = {.tcp = 1, .port = 0, .idle_sec = 0, .use_shm = 0};
+    apply(&cfg);
     server_t *s = server_create(&cfg);
     g_port = server_port(s);
     srv_arg_t sa = {s};
@@ -186,6 +196,7 @@ static void test_tcp_framing_on_wire(void) {
 
 static void test_expiry(int tcp) {
     server_config_t cfg = {.tcp = tcp, .port = 0, .idle_sec = 1, .use_shm = 0};
+    apply(&cfg);
     server_t *s = server_create(&cfg);
     g_port = server_port(s);
     srv_arg_t sa = {s};
@@ -218,6 +229,7 @@ static void test_max_clients_and_many_fds(void) {
     uint64_t lim = raise_nofile_limit();
     int n = lim > 2600 ? 1500 : (int)(lim / 2) - 50;
     server_config_t cfg = {.tcp = 1, .port = 0, .idle_sec = 0, .use_shm = 0, .backlog = 2048};
+    apply(&cfg);
     server_t *s = server_create(&cfg);
     g_port = server_port(s);
     srv_arg_t sa = {s};
@@ -242,15 +254,163 @@ static void test_max_clients_and_many_fds(void) {
     server_destroy(s);
 }
 
-int main(void) {
+/* Minimal HTTP/1.0 GET; returns malloc'd response (headers + body). */
+static char *http_get(int port, const char *path) {
+    struct sockaddr_in sa = {0};
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((uint16_t)port);
+    inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    assert(fd >= 0 && connect(fd, (struct sockaddr *)&sa, sizeof sa) == 0);
+    char req[256];
+    int n = snprintf(req, sizeof req, "GET %s HTTP/1.0\r\n\r\n", path);
+    assert(send(fd, req, (size_t)n, 0) == n);
+    char *buf = malloc(1 << 17);
+    size_t got = 0;
+    for (;;) {
+        struct pollfd p = {.fd = fd, .events = POLLIN};
+        if (poll(&p, 1, 3000) <= 0) break;
+        ssize_t r = recv(fd, buf + got, (1 << 17) - 1 - got, 0);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    buf[got] = 0;
+    close(fd);
+    return buf;
+}
+
+typedef struct { uint32_t id; double drift; int ok; } dj_t;
+
+static void *drift_client(void *arg) {
+    dj_t *j = arg;
+    int fd = dial(1);
+    client_t c;
+    client_init(&c, j->id, 1000 + j->id, 50.0, 200.0, get_time_ns());
+    j->drift = c.hw.drift_ppm;
+    frame_buf_t fb = {0};
+    j->ok = 1;
+    for (int r = 0; r < 110; r++) { /* ~3.3 s at 30 ms */
+        if (exchange(&c, fd, 1, &fb) < 0) { j->ok = 0; break; }
+        usleep(30000);
+    }
+    close(fd);
+    return NULL;
+}
+
+/* Metrics endpoint and per-client drift, against the true drift of simulated clocks. */
+static void test_metrics_and_drift(void) {
+    server_config_t cfg = {.tcp = 1, .port = 0, .idle_sec = 0, .use_shm = 0, .http_enabled = 1, .http_port = 0, .drift_top = 10};
+    apply(&cfg);
+    server_t *s = server_create(&cfg);
+    assert(s && server_http_port(s) > 0);
+    g_port = server_port(s);
+    int hp = server_http_port(s);
+    srv_arg_t sa = {s};
+    pthread_t st;
+    pthread_create(&st, NULL, server_thread, &sa);
+
+    char *r = http_get(hp, "/healthz");
+    assert(strstr(r, "200 OK") && strstr(r, "ok\n"));
+    free(r);
+    r = http_get(hp, "/nope");
+    assert(strstr(r, "404"));
+    free(r);
+
+    enum { N = 6 };
+    pthread_t th[N];
+    dj_t jobs[N];
+    for (int i = 0; i < N; i++) { jobs[i].id = (uint32_t)i + 1; pthread_create(&th[i], NULL, drift_client, &jobs[i]); }
+    for (int i = 0; i < N; i++) { pthread_join(th[i], NULL); assert(jobs[i].ok); }
+
+    r = http_get(hp, "/metrics");
+    assert(strstr(r, "200 OK") && strstr(r, "text/plain"));
+    assert(strstr(r, "timesyncd_requests_total 660"));
+    assert(strstr(r, "timesyncd_rtt_seconds_bucket{le=\"+Inf\"}"));
+    assert(strstr(r, "timesyncd_drift_ready_clients 6"));
+    free(r);
+
+    r = http_get(hp, "/metrics.json");
+    assert(strstr(r, "application/json") && strstr(r, "\"requests\":660"));
+    double worst = 0;
+    for (int i = 0; i < N; i++) {
+        char key[40];
+        snprintf(key, sizeof key, "{\"client_id\":%u,\"drift_ppm\":", jobs[i].id);
+        char *p = strstr(r, key);
+        assert(p);
+        double measured = atof(p + strlen(key));
+        double err = fabs(measured - jobs[i].drift);
+        if (err > worst) worst = err;
+        assert(err < 30.0);
+    }
+    printf("  drift: %d clients with true drift up to 200 ppm, worst server-side estimate error %.1f ppm (loopback)\n", N, worst);
+    free(r);
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    server_stop(s);
+    pthread_join(st, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double ms = (double)(t1.tv_sec - t0.tv_sec) * 1e3 + (double)(t1.tv_nsec - t0.tv_nsec) / 1e6;
+    assert(ms < 1000);
+    /* graceful shutdown closed the listeners */
+    struct sockaddr_in sa2 = {0};
+    sa2.sin_family = AF_INET;
+    sa2.sin_port = htons((uint16_t)g_port);
+    inet_pton(AF_INET, "127.0.0.1", &sa2.sin_addr);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    assert(connect(fd, (struct sockaddr *)&sa2, sizeof sa2) < 0);
+    close(fd);
+    printf("  graceful stop: server_run returned in %.0f ms, listener closed\n", ms);
+    server_destroy(s);
+}
+
+/* A client that never reads: replies queue up, then the server drops it instead of blocking. */
+static void test_slow_reader_dropped(void) {
+    server_config_t cfg = {.tcp = 1, .port = 0, .idle_sec = 0, .use_shm = 0};
+    apply(&cfg);
+    server_t *s = server_create(&cfg);
+    g_port = server_port(s);
+    srv_arg_t sa = {s};
+    pthread_t st;
+    pthread_create(&st, NULL, server_thread, &sa);
+    int fd = dial(1);
+    int small = 2048;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof small);
+    msg_t m = {.type = MSG_REQUEST, .client_id = 1, .t1 = 1};
+    uint8_t f[FRAME_LEN];
+    int sent = 0;
+    for (int i = 0; i < 200000 && sent >= 0; i++) {
+        m.seq = (uint32_t)i;
+        proto_encode_frame(&m, f);
+        struct pollfd p = {.fd = fd, .events = POLLOUT};
+        if (poll(&p, 1, 20) <= 0) { usleep(5000); }
+        if (send(fd, f, sizeof f, MSG_DONTWAIT) < 0 && errno != EAGAIN) sent = -1;
+        server_stats_t st2;
+        server_get_stats(s, &st2);
+        if (st2.active == 0 && i > 100) break; /* dropped */
+    }
+    server_stats_t stats;
+    server_get_stats(s, &stats);
+    assert(stats.active == 0);
+    printf("  non-reading client dropped after its output queue overflowed\n");
+    close(fd);
+    server_stop(s);
+    pthread_join(st, NULL);
+    server_destroy(s);
+}
+
+int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
-    printf("integration tests\n");
+    if (argc > 1) g_backend = argv[1];
+    printf("integration tests (backend requested: %s)\n", g_backend);
     run_mode(1);
     run_mode(0);
     test_tcp_framing_on_wire();
     test_expiry(1);
     test_expiry(0);
     test_max_clients_and_many_fds();
+    test_slow_reader_dropped();
+    test_metrics_and_drift();
     printf("integration tests: passed\n");
     return 0;
 }

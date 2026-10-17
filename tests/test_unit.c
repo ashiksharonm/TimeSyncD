@@ -1,6 +1,8 @@
 /* Unit tests: Welford, wire format + framing, NTP offset/delay math, discipline. */
+#include "../include/drift.h"
 #include "../include/ntp.h"
 #include "../include/protocol.h"
+#include "../include/server.h"
 #include "../include/stats.h"
 #include <assert.h>
 #include <math.h>
@@ -164,6 +166,64 @@ static int test_discipline_converges(void) {
     return 0;
 }
 
+/* Server-side drift estimate: a client clock running +150 ppm fast, with asymmetric jitter. */
+static int test_drift_estimate(void) {
+    drift_table_t *t = drift_create(8);
+    CHECK(t);
+    uint64_t rng = 99, real = 1000000000ULL, delay_prev = 0;
+    int64_t off = 40000000; /* server - client at start: 40 ms */
+    for (int k = 0; k < 200; k++, real += 100000000ULL) { /* 20 s at 10 Hz */
+        rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+        uint64_t out = 50000 + (rng >> 33) % 40000, back = 50000 + (rng >> 13) % 40000;
+        uint64_t t1 = (uint64_t)((double)real * (1.0 + 150e-6)) - (uint64_t)off; /* client clock */
+        uint64_t t2 = real + out;
+        CHECK(drift_observe(t, 7, t1, t2, delay_prev, real) == 0);
+        delay_prev = out + back + 1000;
+        if (k == 3) { drift_entry_t e; CHECK(drift_top(t, &e, 1) == 0); } /* not ready yet */
+    }
+    drift_entry_t e;
+    CHECK(drift_top(t, &e, 1) == 1 && e.client_id == 7 && e.ready);
+    CHECK(fabs(e.drift_ppm - 150.0) < 5.0);
+    drift_summary_t s;
+    drift_summary(t, &s);
+    CHECK(s.ready == 1 && fabs(s.abs_p50 - 150.0) < 5.0);
+    /* capacity is a hard limit: the 9th distinct client is refused, not evicting anyone */
+    for (uint32_t id = 100; id < 107; id++) CHECK(drift_observe(t, id, 1, 2, 0, real) == 0);
+    CHECK(drift_count(t) == 8);
+    CHECK(drift_observe(t, 999, 1, 2, 0, real) == -1 && drift_dropped(t) == 1);
+    CHECK(drift_expire(t, real) == 1 && drift_count(t) == 7); /* only client 7 was last seen before `real` */
+    drift_destroy(t);
+    return 0;
+}
+
+static int test_config(void) {
+    server_config_t c;
+    server_config_defaults(&c);
+    CHECK(c.tcp && c.port == 9000 && c.http_enabled && !strcmp(c.backend, "auto"));
+    const char *path = "build/test_unit.conf";
+    FILE *f = fopen(path, "w");
+    CHECK(f);
+    fputs("# comment\nmode = udp   # trailing comment\nport=4242\nbackend = poll\nmax_clients = 77\n"
+          "metrics = off\ndrift_max_clients = 5\n", f);
+    fclose(f);
+    char err[128];
+    CHECK(server_config_load(path, &c, err, sizeof err) == 0);
+    CHECK(!c.tcp && c.port == 4242 && !strcmp(c.backend, "poll") && c.max_clients == 77 &&
+          !c.http_enabled && c.drift_max_clients == 5);
+    f = fopen(path, "w");
+    fputs("port = 99999\n", f);
+    fclose(f);
+    CHECK(server_config_load(path, &c, err, sizeof err) == -1 && strstr(err, ":1:"));
+    f = fopen(path, "w");
+    fputs("nonsense = 1\n", f);
+    fclose(f);
+    CHECK(server_config_load(path, &c, err, sizeof err) == -1);
+    CHECK(server_config_load("build/does-not-exist.conf", &c, err, sizeof err) == -1);
+    CHECK(server_config_set(&c, "backend", "kqueue") == -1);
+    remove(path);
+    return 0;
+}
+
 int main(void) {
     int fails = 0;
     fails += test_welford();
@@ -172,6 +232,8 @@ int main(void) {
     fails += test_framing();
     fails += test_ntp_math();
     fails += test_discipline_converges();
+    fails += test_drift_estimate();
+    fails += test_config();
     printf("unit tests: %s (%d checks)\n", fails ? "FAILED" : "passed", checks);
     return fails ? 1 : 0;
 }
