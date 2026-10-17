@@ -379,12 +379,14 @@ static void test_slow_reader_dropped(void) {
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &small, sizeof small);
     msg_t m = {.type = MSG_REQUEST, .client_id = 1, .t1 = 1};
     uint8_t f[FRAME_LEN];
-    for (int i = 0; i < 200; i++) { /* wait until the server has accepted us */
-        server_stats_t st0;
+    server_stats_t st0 = {0};
+    for (int i = 0; i < 1000; i++) { /* wait until the server has accepted us (up to 10 s) */
         server_get_stats(s, &st0);
         if (st0.active == 1) break;
         usleep(10000);
     }
+    /* Without this, a late accept on a loaded runner reads as "already dropped" below. */
+    assert(st0.active == 1);
     /* Flood requests without ever reading replies.  Replies fill the kernel buffers, then the
      * server's per-connection queue, and the connection is dropped.  Bounded by a deadline. */
     struct timespec t0, tn;
@@ -403,7 +405,7 @@ static void test_slow_reader_dropped(void) {
             if ((st2.active == 0 && i) || tn.tv_sec - t0.tv_sec > 10) break;
         }
     }
-    for (int i = 0; i < 100; i++) { /* let the server finish removing it */
+    for (int i = 0; i < 500; i++) { /* let the server finish removing it (up to 5 s) */
         server_stats_t st3;
         server_get_stats(s, &st3);
         if (st3.active == 0) break;
@@ -411,6 +413,7 @@ static void test_slow_reader_dropped(void) {
     }
     server_stats_t stats;
     server_get_stats(s, &stats);
+    if (stats.active != 0) fprintf(stderr, "  slow reader still connected after flood (active=%zu)\n", (size_t)stats.active);
     assert(stats.active == 0);
     printf("  non-reading client dropped after its output queue overflowed\n");
     close(fd);
