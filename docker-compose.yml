@@ -1,0 +1,13 @@
+services:
+  timesyncd:
+    build: .
+    ports:
+      - "9000:9000"       # time protocol (TCP)
+      - "9100:9100"       # /metrics, /metrics.json, /healthz
+    ulimits:
+      nofile: 65536
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    stop_grace_period: 5s

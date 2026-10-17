@@ -23,7 +23,7 @@ typedef struct {
     int fd;
     int up;
     frame_buf_t fb;
-    uint64_t next_send;
+    uint64_t next_send, sent_real;
 } lc_t;
 
 static int dial_nonblocking(int tcp, const struct sockaddr_in *sa, int *err) {
@@ -67,7 +67,8 @@ int main(int argc, char **argv) {
     int *idx = calloc((size_t)n, sizeof(int));
     size_t max_samples = (size_t)n * (size_t)((duration_s * 1000 / interval_ms) + 4);
     double *errs = malloc(max_samples * sizeof(double));
-    size_t nerr = 0;
+    double *rtts = malloc(max_samples * sizeof(double));
+    size_t nerr = 0, nrtt = 0;
     int fail_emfile = 0, fail_refused = 0, fail_timeout = 0, fail_addr = 0, fail_other = 0, up = 0;
 
     /* connect in batches so the listen backlog is never overrun */
@@ -138,6 +139,7 @@ int main(int argc, char **argv) {
                 client_build_request(&x->c, now, &req);
                 proto_encode_frame(&req, f);
                 if (send(x->fd, f, sizeof f, 0) < 0 && errno != EAGAIN) { close(x->fd); x->up = 0; closed++; continue; }
+                x->sent_real = get_time_ns();
                 sent++;
                 x->next_send += interval_ns;
             }
@@ -160,9 +162,10 @@ int main(int argc, char **argv) {
                 memcpy(d, buf, (size_t)r);
                 fb_commit(&x->fb, (size_t)r);
                 while (fb_next(&x->fb, &rep) == 1)
-                    if (client_handle_reply(&x->c, &rep, rnow) == 0) replies++;
+                    if (client_handle_reply(&x->c, &rep, rnow) == 0) { replies++; if (rnow >= warm_end && nrtt < max_samples) rtts[nrtt++] = (double)(rnow - x->sent_real); }
             } else if (proto_decode_datagram(buf, (size_t)r, &rep) == 0 && client_handle_reply(&x->c, &rep, rnow) == 0) {
                 replies++;
+                if (rnow >= warm_end && nrtt < max_samples) rtts[nrtt++] = (double)(rnow - x->sent_real);
             }
         }
     }
@@ -172,13 +175,17 @@ int main(int argc, char **argv) {
         if (cl[i].c.delay.n) welford_add(&delay, cl[i].c.delay.mean);
     double p50 = stats_percentile(errs, nerr, 50), p95 = stats_percentile(errs, nerr, 95),
            p99 = stats_percentile(errs, nerr, 99), mx = nerr ? errs[nerr - 1] : 0;
+    double r50 = stats_percentile(rtts, nrtt, 50), r99 = stats_percentile(rtts, nrtt, 99),
+           r999 = stats_percentile(rtts, nrtt, 99.9), rmax = nrtt ? rtts[nrtt - 1] : 0;
     printf("{\"mode\":\"%s\",\"clients_requested\":%d,\"connected\":%d,\"failed_emfile\":%d,\"failed_refused\":%d,\"failed_timeout\":%d,\"failed_addr_not_avail\":%d,"
            "\"failed_other\":%d,\"dropped_after_connect\":%llu,\"connect_seconds\":%.2f,\"nofile_limit\":%llu,"
            "\"interval_ms\":%d,\"warmup_s\":%d,\"duration_s\":%d,\"requests_sent\":%llu,\"replies\":%llu,"
            "\"error_samples\":%zu,\"abs_error_us\":{\"p50\":%.1f,\"p95\":%.1f,\"p99\":%.1f,\"max\":%.1f},"
-           "\"mean_rtt_us\":%.1f}\n",
+           "\"mean_rtt_us\":%.1f,\"rtt_samples\":%zu,\"rtt_us\":{\"p50\":%.1f,\"p99\":%.1f,\"p999\":%.1f,\"max\":%.1f},"
+           "\"replies_per_s\":%.0f}\n",
            tcp ? "tcp" : "udp", n, up, fail_emfile, fail_refused, fail_timeout, fail_addr, fail_other, (unsigned long long)closed,
            connect_s, (unsigned long long)nofile, interval_ms, warmup_s, duration_s, (unsigned long long)sent,
-           (unsigned long long)replies, nerr, p50 / 1e3, p95 / 1e3, p99 / 1e3, mx / 1e3, delay.mean / 1e3);
+           (unsigned long long)replies, nerr, p50 / 1e3, p95 / 1e3, p99 / 1e3, mx / 1e3, delay.mean / 1e3,
+           nrtt, r50 / 1e3, r99 / 1e3, r999 / 1e3, rmax / 1e3, (double)replies / (double)duration_s);
     return 0;
 }
