@@ -290,7 +290,7 @@ static void *drift_client(void *arg) {
     j->drift = c.hw.drift_ppm;
     frame_buf_t fb = {0};
     j->ok = 1;
-    for (int r = 0; r < 110; r++) { /* ~3.3 s at 30 ms */
+    for (int r = 0; r < 200; r++) { /* ~6 s at 30 ms: a longer baseline keeps scheduler jitter on shared CI runners under the bound */
         if (exchange(&c, fd, 1, &fb) < 0) { j->ok = 0; break; }
         usleep(30000);
     }
@@ -325,13 +325,13 @@ static void test_metrics_and_drift(void) {
 
     r = http_get(hp, "/metrics");
     assert(strstr(r, "200 OK") && strstr(r, "text/plain"));
-    assert(strstr(r, "timesyncd_requests_total 660"));
+    assert(strstr(r, "timesyncd_requests_total 1200"));
     assert(strstr(r, "timesyncd_rtt_seconds_bucket{le=\"+Inf\"}"));
     assert(strstr(r, "timesyncd_drift_ready_clients 6"));
     free(r);
 
     r = http_get(hp, "/metrics.json");
-    assert(strstr(r, "application/json") && strstr(r, "\"requests\":660"));
+    assert(strstr(r, "application/json") && strstr(r, "\"requests\":1200"));
     double worst = 0;
     for (int i = 0; i < N; i++) {
         char key[40];
