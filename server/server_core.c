@@ -267,6 +267,8 @@ static void accept_ready(server_t *s, int lfd, conn_kind_t kind, uint64_t now) {
             continue;
         }
         set_sock_opts(fd);
+        if (kind == CK_TIME && s->cfg.sndbuf > 0)
+            setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &s->cfg.sndbuf, sizeof(int));
         if (!conn_add(s, fd, kind, now)) {
             close(fd);
             continue;

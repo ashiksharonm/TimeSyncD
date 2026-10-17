@@ -16,6 +16,7 @@ typedef struct {
     int http_port;    /* 0 = ephemeral (see server_http_port) */
     uint32_t drift_max_clients; /* clients tracked for drift; 0 disables tracking */
     int drain_ms;     /* on stop: keep flushing queued replies for up to this long */
+    int sndbuf;       /* SO_SNDBUF for accepted TCP connections, bytes; 0 = OS default (autotuned) */
     int drift_top;    /* clients listed in /metrics.json (largest |drift| first) */
 } server_config_t;
 

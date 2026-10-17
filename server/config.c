@@ -52,6 +52,7 @@ int server_config_set(server_config_t *c, const char *k, const char *v) {
     else if (!strcmp(k, "metrics_port")) { if (parse_int(v, 0, 65535, &x)) return -1; c->http_port = (int)x; }
     else if (!strcmp(k, "drift_max_clients")) { if (parse_int(v, 0, 10000000, &x)) return -1; c->drift_max_clients = (uint32_t)x; }
     else if (!strcmp(k, "drain_ms")) { if (parse_int(v, 0, 60000, &x)) return -1; c->drain_ms = (int)x; }
+    else if (!strcmp(k, "sndbuf")) { if (parse_int(v, 0, 1 << 26, &x)) return -1; c->sndbuf = (int)x; }
     else if (!strcmp(k, "drift_top")) { if (parse_int(v, 0, 1000, &x)) return -1; c->drift_top = (int)x; }
     else return -1;
     return 0;

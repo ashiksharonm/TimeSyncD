@@ -367,7 +367,7 @@ static void test_metrics_and_drift(void) {
 
 /* A client that never reads: replies queue up, then the server drops it instead of blocking. */
 static void test_slow_reader_dropped(void) {
-    server_config_t cfg = {.tcp = 1, .port = 0, .idle_sec = 0, .use_shm = 0};
+    server_config_t cfg = {.tcp = 1, .port = 0, .idle_sec = 0, .use_shm = 0, .sndbuf = 4096};
     apply(&cfg);
     server_t *s = server_create(&cfg);
     g_port = server_port(s);
@@ -400,7 +400,7 @@ static void test_slow_reader_dropped(void) {
             server_stats_t st2;
             server_get_stats(s, &st2);
             clock_gettime(CLOCK_MONOTONIC, &tn);
-            if ((st2.active == 0 && i) || tn.tv_sec - t0.tv_sec > 20) break;
+            if ((st2.active == 0 && i) || tn.tv_sec - t0.tv_sec > 10) break;
         }
     }
     for (int i = 0; i < 100; i++) { /* let the server finish removing it */

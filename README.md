@@ -1,50 +1,51 @@
-# TimeSyncD: Distributed Timing & Synchronization Engine
+# TimeSyncD
 
-TimeSyncD is a C-based Linux/POSIX project designed to simulate distributed clock synchronization and dynamically measure critical timing characteristics—such as latency, jitter, and drift—across multiple network clients.
+An NTP-style time server in C for Linux and macOS. Clients exchange four timestamps with it (TCP or UDP), compute offset and delay, and discipline a simulated drifting clock; the server runs a single `epoll` loop (with a `poll()` fallback), tracks every client's clock drift, and exposes latency and drift as Prometheus text and JSON.
 
-Inspired by real-world synchronization structures like NTP and PTP, TimeSyncD reflects core systems programming methodologies including robust multi-threading, synchronous/asynchronous POSIX networking, online statistics (Welford), and Inter-Process Communication (IPC).
-
-## Capacity and scope
-
-The server tracks up to 1,024 simultaneous clients (`MAX_CLIENTS` in `server/network.c`) and multiplexes them with `select()`. Precision has not been benchmarked: latency and jitter are measured, not claimed at any sub-millisecond accuracy.
-
-## Features
-
-- **Multi-threaded Server Architecture**: Effectively maintains decoupled accepting threads, broadcaster threads, and response aggregation workers. 
-- **Protocol Flexibility**: Operates synchronously via TCP (connection-oriented) or asynchronously via UDP (connectionless).
-- **Latency & Jitter Aggregation**: Computes standard performance measurements, evaluating exact network jitter using Welford's online algorithm. 
-- **POSIX Shared Memory (IPC)**: Relies on `shm_open` for storing internal metrics safely evaluated by isolated reader executables.
-- **Client Drift Simulation**: Each client applies a simulated random clock offset. There is no NTP-style offset correction; the server only measures round-trip latency and jitter.
-
-## Quick Start & Build
-
-Requires a POSIX-compliant system (ideally Linux), `gcc`, and `make`.
-
-```bash
-# 1. Build the suite
-make 
-
-# 2. Run the Server (Defaults to TCP Port 9000, 100ms interval)
-./server_bin --mode tcp --port 9000 --interval 100
-
-# 3. In another terminal, run the Reader to monitor IPC statistics
-./metrics_reader
-
-# 4. In other terminals, start clients representing workers in the synchronization context
-./client_bin --mode tcp --server-ip 127.0.0.1 --port 9000
+```mermaid
+flowchart LR
+  A[clients: TCP / UDP] --> P[epoll or poll loop, one thread]
+  P --> R[reply with t2, t3]
+  R --> D[per-client drift fit]
+  R --> K[counters + RTT histogram]
+  D --> X[HTTP :9100 /metrics /metrics.json /healthz]
+  K --> X
 ```
 
-## Example Outputs
+Design, trade-offs and failure modes: [docs/DESIGN.md](docs/DESIGN.md).
 
-### Metrics Reader
-![Metrics Reader Output](result/metric_reader.png)
+## Quickstart
 
-### Server Execution
-![Server Execution Output](result/server_1.png)
+```bash
+make                                              # builds server_bin, client_bin, loadgen, tests (-Wall -Wextra -Werror)
+./server_bin --config deploy/timesyncd.conf       # TCP :9000, metrics :9100
+./client_bin --mode tcp --server-ip 127.0.0.1 --port 9000   # in another terminal; curl localhost:9100/metrics.json
+```
 
-### Client Execution
-![Client Execution Output](result/client_1.png)
+Docker: `docker compose up --build` (image runs as an unprivileged user with a health check). systemd: `deploy/timesyncd.service` and `deploy/timesyncd.conf`.
 
-## Internal Architectures
+## What it does
 
-Please refer to `docs/architecture.md` for intricate specifics related to how multi-threading works, how latency and jitter are calculated, and the networking assumptions defining TCP versus UDP paradigms.
+- **Server**: non-blocking sockets, epoll on Linux and poll() elsewhere or by choice (`backend = auto|epoll|poll`), dynamic client table (no `FD_SETSIZE` cap), per-connection frame reassembly and bounded output queues, idle expiry, accept back-off on `EMFILE`, graceful shutdown (listeners close, queued replies flush for up to `drain_ms`).
+- **Offset and delay** (client side): `offset = ((t2-t1)+(t3-t4))/2`, `delay = (t4-t1)-(t3-t2)`, with a sliding-window least-squares discipline that rejects high-delay samples.
+- **Per-client drift tracking** (unique feature): the server fits each client's offset against the client's own clock and reports drift in ppm; `/metrics` carries p50/p99/max of |drift| across clients and `/metrics.json` the top-N clients with offset and sample counts. Tested against clocks with known drift.
+- **Metrics**: Prometheus text (`/metrics`), JSON (`/metrics.json`), `/healthz`, plus the optional POSIX shared-memory block read by `metrics_reader`.
+- **Config**: `key = value` file with CLI overrides.
+
+## Results
+
+All numbers below come from the `loadtest` CI job on a GitHub-hosted runner, loopback, load generator and server on the same machine. The load generator is a single thread, so its own scheduling is part of the measured round trip; treat percentiles as an upper bound for the server alone. Nothing here is a claim about real networks.
+
+@@RESULTS@@
+
+## Tests and CI
+
+`make test` runs 455 unit checks (wire format, NTP math, discipline, drift estimator, config parser) and the integration suite twice (default backend and forced `poll`): TCP and UDP clients converging against a real server, byte-at-a-time framing, garbage input, idle expiry, 1,500 concurrent connections, slow-reader eviction, metrics endpoint, drift against known clock drift, graceful stop. CI (Ubuntu and macOS): build with `-Werror`, tests, ASAN/UBSAN/TSAN, Docker build + health check + SIGTERM exit code, CodeQL, and the load test.
+
+## Limitations
+
+- No authentication or encryption, plain-HTTP metrics: keep both on a private network.
+- Single thread: one core is the ceiling; see the scaling path in the design doc.
+- Drift is estimated from the client's reported clock and assumes a symmetric path; clients that correct their clock before stamping `t1` will look drift-free.
+- Clients are simulated (skew and drift are injected in software); there is no hardware clock discipline.
+- On macOS only the `poll()` backend is available.
