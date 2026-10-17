@@ -356,6 +356,7 @@ void server_run(server_t *s) {
         int r = poll(s->pfds, (nfds_t)(s->nconn + 1), POLL_TIMEOUT_MS);
         if (r < 0) {
             if (errno == EINTR) continue;
+            LOG_ERR("poll failed with %zu fds: %s", s->nconn + 1, strerror(errno));
             break;
         }
         now = get_time_ns();

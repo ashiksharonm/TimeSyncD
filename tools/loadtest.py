@@ -49,7 +49,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="results/loadtest.json")
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--ramp", help="comma list: only run these ramp sizes and merge into --out")
+    ap.add_argument("--drain", type=int, default=1, help="seconds to wait between runs (TIME_WAIT)")
     a = ap.parse_args()
+    if a.ramp:
+        out = json.load(open(a.out))
+        sizes = [int(x) for x in a.ramp.split(",")]
+        out["ramp"] = [r for r in out["ramp"] if r["clients_requested"] not in sizes]
+        time.sleep(a.drain)
+        for n in sizes:
+            row = run("tcp", n, 1000, 10, 25)
+            row["drain_before_s"] = a.drain
+            print(json.dumps(row), file=sys.stderr)
+            out["ramp"].append(row)
+            time.sleep(a.drain)
+        out["ramp"].sort(key=lambda r: r["clients_requested"])
+        json.dump(out, open(a.out, "w"), indent=2)
+        return
     out = {"date": datetime.date.today().isoformat(), "hardware": hardware(), "os": platform.platform(),
            "caveat": "loopback on one machine: no loss, no path asymmetry, shared clock. Error figures are "
                      "localhost lower bounds, not a real-network accuracy claim.",

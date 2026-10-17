@@ -4,8 +4,26 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: make
+      - name: Build (-Wall -Wextra -Werror)
+        run: make
+      - name: Unit and integration tests
+        run: make test
+
+  sanitizers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        san: [asan, ubsan, tsan]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: make ${{ matrix.san }} OPT=-O1

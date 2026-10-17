@@ -68,18 +68,19 @@ int main(int argc, char **argv) {
     size_t max_samples = (size_t)n * (size_t)((duration_s * 1000 / interval_ms) + 4);
     double *errs = malloc(max_samples * sizeof(double));
     size_t nerr = 0;
-    int fail_emfile = 0, fail_refused = 0, fail_other = 0, up = 0;
+    int fail_emfile = 0, fail_refused = 0, fail_timeout = 0, fail_addr = 0, fail_other = 0, up = 0;
 
     /* connect in batches so the listen backlog is never overrun */
     uint64_t t_connect0 = get_time_ns();
-    for (int base = 0; base < n; base += 200) {
-        int end = base + 200 < n ? base + 200 : n, inflight = 0;
+    for (int base = 0; base < n; base += 100) {
+        int end = base + 100 < n ? base + 100 : n, inflight = 0;
         for (int i = base; i < end; i++) {
             int err = 0;
             cl[i].fd = dial_nonblocking(tcp, &sa, &err);
             if (cl[i].fd < 0) {
                 if (err == EMFILE || err == ENFILE) fail_emfile++;
                 else if (err == ECONNREFUSED) fail_refused++;
+                else if (err == EADDRNOTAVAIL) fail_addr++;
                 else fail_other++;
             } else {
                 inflight++;
@@ -98,12 +99,18 @@ int main(int argc, char **argv) {
                 getsockopt(pf[k].fd, SOL_SOCKET, SO_ERROR, &e, &l);
                 lc_t *x = &cl[idx[k]];
                 if (e == 0 && !(pf[k].revents & (POLLERR | POLLHUP))) { x->up = 1; up++; }
-                else { close(x->fd); x->fd = -1; if (e == ECONNREFUSED) fail_refused++; else fail_other++; }
+                else {
+                    close(x->fd); x->fd = -1;
+                    if (e == ECONNREFUSED) fail_refused++;
+                    else if (e == ETIMEDOUT) fail_timeout++;
+                    else if (e == EADDRNOTAVAIL) fail_addr++;
+                    else fail_other++;
+                }
                 inflight--;
             }
         }
         for (int i = base; i < end; i++) /* still pending after 5 s */
-            if (cl[i].fd >= 0 && !cl[i].up) { close(cl[i].fd); cl[i].fd = -1; fail_other++; }
+            if (cl[i].fd >= 0 && !cl[i].up) { close(cl[i].fd); cl[i].fd = -1; fail_timeout++; }
     }
     double connect_s = (double)(get_time_ns() - t_connect0) / 1e9;
 
@@ -165,12 +172,12 @@ int main(int argc, char **argv) {
         if (cl[i].c.delay.n) welford_add(&delay, cl[i].c.delay.mean);
     double p50 = stats_percentile(errs, nerr, 50), p95 = stats_percentile(errs, nerr, 95),
            p99 = stats_percentile(errs, nerr, 99), mx = nerr ? errs[nerr - 1] : 0;
-    printf("{\"mode\":\"%s\",\"clients_requested\":%d,\"connected\":%d,\"failed_emfile\":%d,\"failed_refused\":%d,"
+    printf("{\"mode\":\"%s\",\"clients_requested\":%d,\"connected\":%d,\"failed_emfile\":%d,\"failed_refused\":%d,\"failed_timeout\":%d,\"failed_addr_not_avail\":%d,"
            "\"failed_other\":%d,\"dropped_after_connect\":%llu,\"connect_seconds\":%.2f,\"nofile_limit\":%llu,"
            "\"interval_ms\":%d,\"warmup_s\":%d,\"duration_s\":%d,\"requests_sent\":%llu,\"replies\":%llu,"
            "\"error_samples\":%zu,\"abs_error_us\":{\"p50\":%.1f,\"p95\":%.1f,\"p99\":%.1f,\"max\":%.1f},"
            "\"mean_rtt_us\":%.1f}\n",
-           tcp ? "tcp" : "udp", n, up, fail_emfile, fail_refused, fail_other, (unsigned long long)closed,
+           tcp ? "tcp" : "udp", n, up, fail_emfile, fail_refused, fail_timeout, fail_addr, fail_other, (unsigned long long)closed,
            connect_s, (unsigned long long)nofile, interval_ms, warmup_s, duration_s, (unsigned long long)sent,
            (unsigned long long)replies, nerr, p50 / 1e3, p95 / 1e3, p99 / 1e3, mx / 1e3, delay.mean / 1e3);
     return 0;
